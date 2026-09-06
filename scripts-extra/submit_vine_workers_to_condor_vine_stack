@@ -1,0 +1,86 @@
+#! /bin/bash
+
+# USE: ./submit_vine_coffea_casa [num of workers]
+
+set -vex
+
+NUM_WORKERS=${1:-1}
+
+IMAGE=http://hub.opensciencegrid.org/coffea-casa/cc-analysis-alma9:2026.04.16
+MANAGER=${HOST_IP}:8786
+CORES=1
+MEMORY=$((CORES*4))GB
+DISK=$((CORES*8))GB
+
+if [[ -z "${CONDA_PREFIX}" ]]
+then
+    echo "ERROR: CONDA_PREFIX is not set. Activate a conda environment first." >&2
+    exit 1
+fi
+
+which condor_submit > /dev/null || { echo "ERROR: condor_submit not found in PATH" >&2; exit 1; }
+
+workdir="${TMPDIR:-/tmp}/${USER}-${HOST_IP:-local}-vine-workers"
+
+mkdir -p ${workdir}
+
+echo "fetching worker binary..."
+WORKER_BIN=$(which vine_worker) || { echo "ERROR: vine_worker not found in PATH" >&2; exit 1; }
+cp ${WORKER_BIN} ${workdir}/vine_worker_bin
+
+echo "fetching env runner..."
+PONCHO=$(which poncho_package_run) || { echo "ERROR: poncho_package_run not found in PATH" >&2; exit 1; }
+cp ${PONCHO} ${workdir}/poncho_package_run
+
+if [[ ! -f ${workdir}/env.tar.gz ]]
+then
+    poncho_package_create "${CONDA_PREFIX}" ${workdir}/env.tar.gz
+fi
+
+if [[ ! -f ${workdir}/vine_worker ]]
+then
+    cat > ${workdir}/vine_worker << 'EOF'
+#!/bin/bash
+
+exec ./poncho_package_run -e env.tar.gz -- ./vine_worker_bin "$@"
+EOF
+
+chmod 755 ${workdir}/vine_worker
+
+fi
+
+cd ${workdir}
+
+echo "submitting ${NUM_WORKERS} worker(s) from ${workdir}..."
+
+cat > condor_submit_file << EOF
+universe = docker
+docker_image = ${IMAGE}
+executable = /bin/echo
+arguments = "actual worker binary called from prepare-env-cc-analysis.sh"
+should_transfer_files = yes
+when_to_transfer_output = on_exit
+output = worker.\$(CLUSTER).\$(PROCESS).output
+error = worker.\$(CLUSTER).\$(PROCESS).error
+log = workers.log
++JobMaxSuspendTime = 0
+
++DaskSchedulerAddress = "${MANAGER}"
++CoffeaCasaWorkerType = "taskvine"
+container_service_names = dask,nanny
+dask_container_port = 8786
+nanny_container_port = 8001
+transfer_input_files = /etc/cmsaf-secrets-chown/access_token
+encrypt_input_files = /etc/cmsaf-secrets-chown/access_token
+should_transfer_files = YES
+initialdir = /
+environment = "BEARER_TOKEN_FILE=\$\$(CondorScratchDir)/access_token XCACHE_FILE=\$\$(CondorScratchDir)/xcache_token"
+
+getenv = true
+request_cpus = ${CORES}
+request_memory = ${MEMORY}
+request_disk = ${DISK}
+queue ${NUM_WORKERS}
+EOF
+
+exec condor_submit -spool condor_submit_file
