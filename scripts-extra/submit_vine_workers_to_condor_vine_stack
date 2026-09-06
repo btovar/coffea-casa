@@ -12,6 +12,12 @@ CORES=1
 MEMORY=$((CORES*4))GB
 DISK=$((CORES*8))GB
 
+if [[ -z "${HOST_IP}" ]]
+then
+    echo "ERROR: HOST_IP is not set." >&2
+    exit 1
+fi
+
 if [[ -z "${CONDA_PREFIX}" ]]
 then
     echo "ERROR: CONDA_PREFIX is not set. Activate a conda environment first." >&2
@@ -20,7 +26,7 @@ fi
 
 which condor_submit > /dev/null || { echo "ERROR: condor_submit not found in PATH" >&2; exit 1; }
 
-workdir="${TMPDIR:-/tmp}/${USER}-${HOST_IP:-local}-vine-workers"
+workdir="${TMPDIR:-/tmp}/${USER}-${HOST_IP}-vine-workers"
 
 mkdir -p ${workdir}
 
@@ -72,7 +78,6 @@ dask_container_port = 8786
 nanny_container_port = 8001
 transfer_input_files = /etc/cmsaf-secrets-chown/access_token,vine_worker,vine_worker_bin,poncho_package_run,env.tar.gz
 encrypt_input_files = /etc/cmsaf-secrets-chown/access_token
-should_transfer_files = YES
 initialdir = /
 environment = "BEARER_TOKEN_FILE=\$\$(CondorScratchDir)/access_token XCACHE_FILE=\$\$(CondorScratchDir)/xcache_token PATH=\$\$(CondorScratchDir):\$\$ENV(PATH)"
 
